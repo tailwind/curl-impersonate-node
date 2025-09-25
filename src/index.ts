@@ -146,7 +146,7 @@ export class CurlImpersonate {
 
           break;
         }
-        if (process.arch === "arm") {
+        if (process.arch === "arm64") {
           if (isFF) {
             this.binary = "curl-impersonate-firefox-linux-aarch64";
           } else {
