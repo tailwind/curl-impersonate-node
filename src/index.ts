@@ -22,8 +22,6 @@ import * as proc from "node:child_process";
 import * as path from "node:path";
 import * as fs from "node:fs";
 
-const __dirname = import.meta.dirname;
-
 export class CurlImpersonate {
   url: string;
   options: CurlImpersonateOptions;
