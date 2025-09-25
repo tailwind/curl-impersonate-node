@@ -1,6 +1,6 @@
 {
   "name": "@tailwind/node-curl-impersonate",
-  "version": "1.5.5",
+  "version": "1.5.6",
   "description": "A Fork of node-curl-impersonate, a wrapper around cURL-impersonate, a binary which can be used to bypass TLS fingerprinting.",
   "main": "dist/index.js",
   "type": "module",
