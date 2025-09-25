@@ -72,9 +72,9 @@ export class CurlImpersonate {
       if (this.validateOptions(this.options)) {
         this.setProperBinary();
         const binaryPath = this.getBinaryPath(this.binary);
-        if (this.binary && fs.existsSync(binaryPath)) {
-          fs.chmodSync(binaryPath, 0o755);
-        }
+        // if (this.binary && fs.existsSync(binaryPath)) {
+        //   fs.chmodSync(binaryPath, 0o755);
+        // }
         this.checkIfPresetAndMerge();
         const headers = this.convertHeaderObjectToCURL();
         const flags = this.options.flags || [];
