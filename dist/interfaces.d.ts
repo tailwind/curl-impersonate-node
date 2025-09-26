@@ -8,7 +8,9 @@ interface CurlImpersonateOptions {
     followRedirects?: boolean | true;
     verbose?: boolean | false;
     impersonate?: validBrowsers[number];
-    binaryOverridePath: string | undefined;
+    binaryOverridePath?: string;
+    fetchBinaryWhenMissing?: boolean;
+    binaryCdnUrl?: string;
 }
 interface CurlResponse {
     ipAddress: string | undefined;

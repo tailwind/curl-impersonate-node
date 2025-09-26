@@ -5,6 +5,8 @@
 import presets from "./presets.js";
 import * as proc from "node:child_process";
 import * as path from "node:path";
+import * as fs from "node:fs";
+import * as https from "node:https";
 export class CurlImpersonate {
     url;
     options;
@@ -12,6 +14,8 @@ export class CurlImpersonate {
     binary;
     impersonatePresets;
     binaryOverridePath;
+    fetchBinaryWhenMissing = false;
+    binaryCdnUrl = "https://assets.tailwindapp.com/bin";
     constructor(url, options) {
         this.url = url;
         this.options = options;
@@ -25,6 +29,53 @@ export class CurlImpersonate {
         ];
         this.binaryOverridePath =
             options.binaryOverridePath || process.env.CURL_IMPERSONATE_BINARY_PATH;
+        this.fetchBinaryWhenMissing = options.fetchBinaryWhenMissing || false;
+        this.binaryCdnUrl = options.binaryCdnUrl || this.binaryCdnUrl;
+    }
+    downloadSemaphores = {};
+    tempDirectory = "/tmp/curl-impersonate";
+    fetchBinary() {
+        const binaryPath = this.getBinaryPath(this.binary);
+        if (fs.existsSync(binaryPath)) {
+            return Promise.resolve(binaryPath);
+        }
+        // Check if binary exists in temp directory
+        const tempBinaryPath = path.join(this.tempDirectory, this.binary);
+        if (fs.existsSync(tempBinaryPath)) {
+            return Promise.resolve(tempBinaryPath);
+        }
+        // Check if download is already in progress
+        const downloadPromise = this.downloadSemaphores[this.binary];
+        if (downloadPromise) {
+            return downloadPromise;
+        }
+        // Create temp directory if it doesn't exist
+        if (!fs.existsSync(this.tempDirectory)) {
+            fs.mkdirSync(this.tempDirectory, { recursive: true });
+        }
+        console.log(`Downloading binary from ${this.binaryCdnUrl}/${this.binary}`);
+        // Start download
+        this.downloadSemaphores[this.binary] = new Promise((resolve, reject) => {
+            const file = fs.createWriteStream(tempBinaryPath, { mode: 0o755 });
+            const url = `${this.binaryCdnUrl}/${this.binary}`;
+            https
+                .get(url, (response) => {
+                if (response.statusCode !== 200) {
+                    reject(new Error(`Failed to download binary. Status code: ${response.statusCode}`));
+                    return;
+                }
+                response.pipe(file);
+                file.on("finish", () => {
+                    file.close();
+                    resolve(tempBinaryPath);
+                });
+            })
+                .on("error", (err) => {
+                fs.unlink(tempBinaryPath, () => { });
+                reject(err);
+            });
+        });
+        return this.downloadSemaphores[this.binary];
     }
     checkIfPresetAndMerge() {
         if (this.options.impersonate === undefined)
@@ -43,38 +94,41 @@ export class CurlImpersonate {
         }
         return path.join(__dirname, "..", "bin", binary);
     }
-    makeRequest(url) {
+    async getBinaryPathWithDownload(binary) {
+        const defaultPath = path.join(__dirname, "..", "bin", binary);
+        if (this.binaryOverridePath &&
+            fs.existsSync(path.join(this.binaryOverridePath, binary))) {
+            return path.join(this.binaryOverridePath, binary);
+        }
+        if (fs.existsSync(defaultPath)) {
+            return defaultPath;
+        }
+        // If fetchBinaryWhenMissing is enabled, try to download it
+        if (this.fetchBinaryWhenMissing) {
+            console.warn("Curl-impersonate binary not found, fetching from CDN");
+            return await this.fetchBinary();
+        }
+        return defaultPath;
+    }
+    async makeRequest(url) {
         if (url !== undefined)
             this.url = url;
-        return new Promise((resolve, reject) => {
-            if (this.validateOptions(this.options)) {
-                this.setProperBinary();
-                const binaryPath = this.getBinaryPath(this.binary);
-                // if (this.binary && fs.existsSync(binaryPath)) {
-                //   fs.chmodSync(binaryPath, 0o755);
-                // }
-                this.checkIfPresetAndMerge();
-                const headers = this.convertHeaderObjectToCURL();
-                const flags = this.options.flags || [];
-                if (this.options.method === "GET") {
-                    this.getRequest(flags, headers)
-                        .then((response) => resolve(response))
-                        .catch((error) => reject(error));
-                }
-                else if (this.options.method === "POST") {
-                    this.postRequest(flags, headers, this.options.body)
-                        .then((response) => resolve(response))
-                        .catch((error) => reject(error));
-                }
-                else {
-                    // Handle other HTTP methods if needed
-                    reject(new Error("Unsupported HTTP method"));
-                }
-            }
-            else {
-                reject(new Error("Invalid options"));
-            }
-        });
+        if (!this.validateOptions(this.options)) {
+            throw new Error("Invalid options");
+        }
+        this.setProperBinary();
+        // Ensure binary is available (download if necessary)
+        const binaryPath = await this.getBinaryPathWithDownload(this.binary);
+        this.checkIfPresetAndMerge();
+        const headers = this.convertHeaderObjectToCURL();
+        const flags = this.options.flags || [];
+        if (this.options.method === "GET") {
+            return await this.getRequest(flags, headers, binaryPath);
+        }
+        if (this.options.method === "POST") {
+            return await this.postRequest(flags, headers, this.options.body, binaryPath);
+        }
+        throw new Error("Unsupported HTTP method");
     }
     setNewURL(url) {
         this.url = url;
@@ -145,19 +199,18 @@ export class CurlImpersonate {
                 throw new Error(`Unsupported Platform! ${process.platform}`);
         }
     }
-    async getRequest(flags, headers) {
+    async getRequest(flags, headers, binaryPath) {
         // GET REQUEST
         flags.push("-v");
-        const binpath = this.getBinaryPath(this.binary);
         const args = `${flags.join(" ")} ${headers} '${this.url}'`;
         if (this.options.verbose) {
             console.log({
-                binpath: binpath,
+                binpath: binaryPath,
                 args: args,
                 url: this.url,
             });
         }
-        const result = proc.spawnSync(`${binpath} ${args}`, { shell: true });
+        const result = proc.spawnSync(`${binaryPath} ${args}`, { shell: true });
         const response = result.stdout.toString();
         const verbose = result.stderr.toString();
         const requestData = this.extractRequestData(verbose);
@@ -173,13 +226,12 @@ export class CurlImpersonate {
         };
         return returnObject;
     }
-    async postRequest(flags, headers, body) {
+    async postRequest(flags, headers, body, binaryPath) {
         // POST REQUEST
         flags.push("-v");
         const curlBody = this.setupBodyArgument(body);
-        const binpath = this.getBinaryPath(this.binary);
         const args = `${flags.join(" ")} ${headers} ${this.url}`;
-        const result = proc.spawnSync(`${binpath} ${args} -d ${curlBody}`, {
+        const result = proc.spawnSync(`${binaryPath} ${args} -d ${curlBody}`, {
             shell: true,
         });
         const response = result.stdout.toString();

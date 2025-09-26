@@ -6,9 +6,15 @@ export declare class CurlImpersonate {
     binary: string;
     impersonatePresets: string[];
     binaryOverridePath: string | undefined;
+    fetchBinaryWhenMissing: boolean;
+    binaryCdnUrl: string;
     constructor(url: string, options: CurlImpersonateOptions);
+    private downloadSemaphores;
+    private tempDirectory;
+    private fetchBinary;
     private checkIfPresetAndMerge;
     private getBinaryPath;
+    private getBinaryPathWithDownload;
     makeRequest(url?: string): Promise<CurlResponse>;
     setNewURL(url: string): void;
     validateOptions(options: CurlImpersonateOptions): boolean;
