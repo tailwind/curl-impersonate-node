@@ -65,6 +65,8 @@ export class CurlImpersonate {
       return Promise.resolve(tempBinaryPath);
     }
 
+    console.warn("Curl-impersonate binary not found, fetching from CDN");
+
     // Check if download is already in progress
     const downloadPromise = this.downloadSemaphores[this.binary];
     if (downloadPromise) {
@@ -145,7 +147,6 @@ export class CurlImpersonate {
 
     // If fetchBinaryWhenMissing is enabled, try to download it
     if (this.fetchBinaryWhenMissing) {
-      console.warn("Curl-impersonate binary not found, fetching from CDN");
       return await this.fetchBinary();
     }
 
