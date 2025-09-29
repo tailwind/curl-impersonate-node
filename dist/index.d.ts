@@ -26,4 +26,5 @@ export declare class CurlImpersonate {
     private extractResponseHeaders;
     private convertHeaderObjectToCURL;
 }
+export type { CurlImpersonateOptions };
 export default CurlImpersonate;
