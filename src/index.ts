@@ -371,5 +371,5 @@ export class CurlImpersonate {
       .join(" ");
   }
 }
-
+export type { CurlImpersonateOptions };
 export default CurlImpersonate;
