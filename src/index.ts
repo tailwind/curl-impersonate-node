@@ -153,6 +153,28 @@ export class CurlImpersonate {
     return defaultPath;
   }
 
+  private assertSpawnOutputs(
+    result: proc.SpawnSyncReturns<Buffer | string>,
+    binaryPath: string
+  ) {
+    if (result.error) {
+      throw new Error(
+        `curl-impersonate failed to start (${binaryPath}): ${result.error.message}`
+      );
+    }
+
+    if (result.stdout == null || result.stderr == null) {
+      throw new Error(
+        `curl-impersonate produced no output (binary: ${binaryPath}, status: ${result.status}, signal: ${result.signal})`
+      );
+    }
+
+    return {
+      stdout: result.stdout,
+      stderr: result.stderr,
+    };
+  }
+
   async makeRequest(url?: string): Promise<CurlResponse> {
     if (url !== undefined) this.url = url;
 
@@ -269,8 +291,15 @@ export class CurlImpersonate {
       });
     }
     const result = proc.spawnSync(`${binaryPath} ${args}`, { shell: true });
-    const response = result.stdout.toString();
-    const verbose = result.stderr.toString();
+    const { stdout, stderr } = this.assertSpawnOutputs(result, binaryPath);
+    const response = stdout.toString();
+    const verbose = stderr.toString();
+
+    if (result.status && result.status !== 0) {
+      throw new Error(
+        `curl-impersonate exited with code ${result.status} (signal: ${result.signal}) using ${binaryPath}. stderr: ${verbose.slice(0, 500)}`
+      );
+    }
 
     const requestData = this.extractRequestData(verbose);
     const respHeaders = this.extractResponseHeaders(verbose);
@@ -302,9 +331,17 @@ export class CurlImpersonate {
     const result = proc.spawnSync(`${binaryPath} ${args} -d ${curlBody}`, {
       shell: true,
     });
-    const response = result.stdout.toString();
+    const { stdout, stderr } = this.assertSpawnOutputs(result, binaryPath);
+
+    const response = stdout.toString();
     const cleanedPayload = response.replace(/\s+\+\s+/g, "");
-    const verbose = result.stderr.toString();
+    const verbose = stderr.toString();
+
+    if (result.status && result.status !== 0) {
+      throw new Error(
+        `curl-impersonate exited with code ${result.status} (signal: ${result.signal}) using ${binaryPath}. stderr: ${verbose.slice(0, 500)}`
+      );
+    }
 
     const requestData = this.extractRequestData(verbose);
     const respHeaders = this.extractResponseHeaders(verbose);

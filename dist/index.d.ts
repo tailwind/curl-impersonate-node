@@ -15,6 +15,7 @@ export declare class CurlImpersonate {
     private checkIfPresetAndMerge;
     private getBinaryPath;
     private getBinaryPathWithDownload;
+    private assertSpawnOutputs;
     makeRequest(url?: string): Promise<CurlResponse>;
     setNewURL(url: string): void;
     validateOptions(options: CurlImpersonateOptions): boolean;
