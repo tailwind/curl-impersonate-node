@@ -3,6 +3,7 @@
     curl-impersonate by wearr.
 */
 import presets from "./presets.js";
+import { buildCurlArgs, buildSpawnEnv } from "./args.js";
 import * as proc from "node:child_process";
 import * as path from "node:path";
 import * as fs from "node:fs";
@@ -83,23 +84,24 @@ export class CurlImpersonate {
             return;
         if (this.impersonatePresets.includes(this.options.impersonate)) {
             const preset = presets[this.options.impersonate];
-            this.options.headers = Object.assign(this.options.headers, preset.headers);
-            this.options.flags = this.options.flags
-                ? this.options.flags.concat(preset.flags)
-                : preset.flags;
+            // Copy instead of mutating: assigning preset.flags by reference let later
+            // flag pushes grow the shared module-level preset array on every request
+            // in a warm container, eventually exceeding execve's argv limit (E2BIG).
+            this.options.headers = { ...this.options.headers, ...preset.headers };
+            this.options.flags = [...(this.options.flags ?? []), ...preset.flags];
         }
     }
     getBinaryPath(binary) {
         if (this.binaryOverridePath) {
-            return path.join(this.binaryOverridePath, binary);
+            return path.resolve(this.binaryOverridePath, binary);
         }
-        return path.join(__dirname, "..", "bin", binary);
+        return path.resolve(__dirname, "..", "bin", binary);
     }
     async getBinaryPathWithDownload(binary) {
-        const defaultPath = path.join(__dirname, "..", "bin", binary);
+        const defaultPath = path.resolve(__dirname, "..", "bin", binary);
         if (this.binaryOverridePath &&
             fs.existsSync(path.join(this.binaryOverridePath, binary))) {
-            return path.join(this.binaryOverridePath, binary);
+            return path.resolve(this.binaryOverridePath, binary);
         }
         if (fs.existsSync(defaultPath)) {
             return defaultPath;
@@ -112,6 +114,16 @@ export class CurlImpersonate {
     }
     assertSpawnOutputs(result, binaryPath) {
         if (result.error) {
+            const code = result.error.code;
+            if (code === "ENOBUFS") {
+                throw new Error(`curl-impersonate response exceeded maxBuffer of ${this.maxBuffer()} bytes (binary: ${binaryPath}). Raise the maxBuffer option if larger responses are expected.`);
+            }
+            if (code === "ETIMEDOUT") {
+                throw new Error(`curl-impersonate timed out after ${this.options.timeout}ms (binary: ${binaryPath})`);
+            }
+            if (code === "E2BIG") {
+                throw new Error(`curl-impersonate argv+env exceeded the execve limit (E2BIG, binary: ${binaryPath})`);
+            }
             throw new Error(`curl-impersonate failed to start (${binaryPath}): ${result.error.message}`);
         }
         if (result.stdout == null || result.stderr == null) {
@@ -121,6 +133,26 @@ export class CurlImpersonate {
             stdout: result.stdout,
             stderr: result.stderr,
         };
+    }
+    maxBuffer() {
+        return this.options.maxBuffer ?? 10 * 1024 * 1024;
+    }
+    execCurl(binaryPath, args) {
+        // No shell: array args go straight to execve, so scraped content in
+        // URLs/headers can never be interpreted by /bin/sh, and the child gets a
+        // minimal allowlisted env instead of the full (growing) parent env.
+        const result = proc.spawnSync(binaryPath, args, {
+            env: buildSpawnEnv(process.env, this.options.env),
+            maxBuffer: this.maxBuffer(),
+            timeout: this.options.timeout,
+        });
+        const { stdout, stderr } = this.assertSpawnOutputs(result, binaryPath);
+        const response = stdout.toString();
+        const verbose = stderr.toString();
+        if (result.status && result.status !== 0) {
+            throw new Error(`curl-impersonate exited with code ${result.status} (signal: ${result.signal}) using ${binaryPath}. stderr: ${verbose.slice(0, 500)}`);
+        }
+        return { response, verbose };
     }
     async makeRequest(url) {
         if (url !== undefined)
@@ -132,13 +164,12 @@ export class CurlImpersonate {
         // Ensure binary is available (download if necessary)
         const binaryPath = await this.getBinaryPathWithDownload(this.binary);
         this.checkIfPresetAndMerge();
-        const headers = this.convertHeaderObjectToCURL();
         const flags = this.options.flags || [];
         if (this.options.method === "GET") {
-            return await this.getRequest(flags, headers, binaryPath);
+            return await this.getRequest(flags, binaryPath);
         }
         if (this.options.method === "POST") {
-            return await this.postRequest(flags, headers, this.options.body, binaryPath);
+            return await this.postRequest(flags, this.options.body, binaryPath);
         }
         throw new Error("Unsupported HTTP method");
     }
@@ -163,16 +194,14 @@ export class CurlImpersonate {
         }
     }
     setupBodyArgument(body) {
-        if (body !== undefined) {
-            try {
-                JSON.stringify(body);
-            }
-            catch {
-                return body; // Assume that content type is anything except www-form-urlencoded or form-data, not quite sure if graphql is supported.
-            }
-        }
-        else {
+        if (body === undefined) {
             throw new Error(`Body is undefined in a post request! Current body is ${this.options.body}`);
+        }
+        try {
+            return JSON.stringify(body);
+        }
+        catch (error) {
+            throw new Error(`POST body is not JSON-serializable: ${error instanceof Error ? error.message : error}`);
         }
     }
     setProperBinary() {
@@ -211,10 +240,13 @@ export class CurlImpersonate {
                 throw new Error(`Unsupported Platform! ${process.platform}`);
         }
     }
-    async getRequest(flags, headers, binaryPath) {
+    async getRequest(flags, binaryPath) {
         // GET REQUEST
-        flags.push("-v");
-        const args = `${flags.join(" ")} ${headers} '${this.url}'`;
+        const args = buildCurlArgs({
+            flags,
+            headers: this.options.headers,
+            url: this.url,
+        });
         if (this.options.verbose) {
             console.log({
                 binpath: binaryPath,
@@ -222,13 +254,7 @@ export class CurlImpersonate {
                 url: this.url,
             });
         }
-        const result = proc.spawnSync(`${binaryPath} ${args}`, { shell: true });
-        const { stdout, stderr } = this.assertSpawnOutputs(result, binaryPath);
-        const response = stdout.toString();
-        const verbose = stderr.toString();
-        if (result.status && result.status !== 0) {
-            throw new Error(`curl-impersonate exited with code ${result.status} (signal: ${result.signal}) using ${binaryPath}. stderr: ${verbose.slice(0, 500)}`);
-        }
+        const { response, verbose } = this.execCurl(binaryPath, args);
         const requestData = this.extractRequestData(verbose);
         const respHeaders = this.extractResponseHeaders(verbose);
         const returnObject = {
@@ -242,21 +268,17 @@ export class CurlImpersonate {
         };
         return returnObject;
     }
-    async postRequest(flags, headers, body, binaryPath) {
+    async postRequest(flags, body, binaryPath) {
         // POST REQUEST
-        flags.push("-v");
         const curlBody = this.setupBodyArgument(body);
-        const args = `${flags.join(" ")} ${headers} ${this.url}`;
-        const result = proc.spawnSync(`${binaryPath} ${args} -d ${curlBody}`, {
-            shell: true,
+        const args = buildCurlArgs({
+            flags,
+            headers: this.options.headers,
+            url: this.url,
+            body: curlBody,
         });
-        const { stdout, stderr } = this.assertSpawnOutputs(result, binaryPath);
-        const response = stdout.toString();
+        const { response, verbose } = this.execCurl(binaryPath, args);
         const cleanedPayload = response.replace(/\s+\+\s+/g, "");
-        const verbose = stderr.toString();
-        if (result.status && result.status !== 0) {
-            throw new Error(`curl-impersonate exited with code ${result.status} (signal: ${result.signal}) using ${binaryPath}. stderr: ${verbose.slice(0, 500)}`);
-        }
         const requestData = this.extractRequestData(verbose);
         const respHeaders = this.extractResponseHeaders(verbose);
         const returnObject = {
@@ -309,11 +331,6 @@ export class CurlImpersonate {
             }
         }
         return responseHeaders;
-    }
-    convertHeaderObjectToCURL() {
-        return Object.entries(this.options.headers)
-            .map(([key, value]) => `-H '${key}: ${value}'`)
-            .join(" ");
     }
 }
 export default CurlImpersonate;

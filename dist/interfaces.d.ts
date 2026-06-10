@@ -11,6 +11,10 @@ interface CurlImpersonateOptions {
     binaryOverridePath?: string;
     fetchBinaryWhenMissing?: boolean;
     binaryCdnUrl?: string;
+    /** Max bytes allowed on the child's stdout/stderr. Default 10 MiB. */
+    maxBuffer?: number;
+    /** Extra environment variables for the curl-impersonate child process, merged over the built-in allowlist. */
+    env?: Record<string, string>;
 }
 interface CurlResponse {
     ipAddress: string | undefined;

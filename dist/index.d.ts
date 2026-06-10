@@ -16,6 +16,8 @@ export declare class CurlImpersonate {
     private getBinaryPath;
     private getBinaryPathWithDownload;
     private assertSpawnOutputs;
+    private maxBuffer;
+    private execCurl;
     makeRequest(url?: string): Promise<CurlResponse>;
     setNewURL(url: string): void;
     validateOptions(options: CurlImpersonateOptions): boolean;
@@ -25,7 +27,6 @@ export declare class CurlImpersonate {
     private postRequest;
     private extractRequestData;
     private extractResponseHeaders;
-    private convertHeaderObjectToCURL;
 }
 export type { CurlImpersonateOptions };
 export default CurlImpersonate;
