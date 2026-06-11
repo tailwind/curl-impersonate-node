@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (typecheck + compile)
+        run: npm run build
+
+      # Includes real-binary integration tests against a local echo server
+      # using the committed bin/curl-impersonate-chrome-linux-x86 binary.
+      # The opt-in Pinterest network smoke test (PINTEREST_SMOKE=1) stays off in CI.
+      - name: Test
+        run: npm test
