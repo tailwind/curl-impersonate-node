@@ -9,7 +9,6 @@ export declare class CurlImpersonate {
     fetchBinaryWhenMissing: boolean;
     binaryCdnUrl: string;
     constructor(url: string, options: CurlImpersonateOptions);
-    private downloadSemaphores;
     private tempDirectory;
     private fetchBinary;
     private checkIfPresetAndMerge;
