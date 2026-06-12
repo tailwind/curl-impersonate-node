@@ -8,6 +8,11 @@ import * as proc from "node:child_process";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as https from "node:https";
+// Module-level: callers (e.g. aero's pinterest-scraper) create a fresh
+// CurlImpersonate per request, so a per-instance semaphore never dedupes
+// concurrent downloads of the same binary.
+const downloadsInFlight = new Map();
+let downloadCounter = 0;
 export class CurlImpersonate {
     url;
     options;
@@ -33,7 +38,6 @@ export class CurlImpersonate {
         this.fetchBinaryWhenMissing = options.fetchBinaryWhenMissing || false;
         this.binaryCdnUrl = options.binaryCdnUrl || this.binaryCdnUrl;
     }
-    downloadSemaphores = {};
     tempDirectory = "/tmp/curl-impersonate";
     fetchBinary() {
         const binaryPath = this.getBinaryPath(this.binary);
@@ -45,39 +49,62 @@ export class CurlImpersonate {
         if (fs.existsSync(tempBinaryPath)) {
             return Promise.resolve(tempBinaryPath);
         }
-        console.warn("Curl-impersonate binary not found, fetching from CDN");
         // Check if download is already in progress
-        const downloadPromise = this.downloadSemaphores[this.binary];
-        if (downloadPromise) {
-            return downloadPromise;
+        const inFlight = downloadsInFlight.get(this.binary);
+        if (inFlight) {
+            return inFlight;
         }
+        console.warn("Curl-impersonate binary not found, fetching from CDN");
         // Create temp directory if it doesn't exist
         if (!fs.existsSync(this.tempDirectory)) {
             fs.mkdirSync(this.tempDirectory, { recursive: true });
         }
-        console.log(`Downloading binary from ${this.binaryCdnUrl}/${this.binary}`);
-        // Start download
-        this.downloadSemaphores[this.binary] = new Promise((resolve, reject) => {
-            const file = fs.createWriteStream(tempBinaryPath, { mode: 0o755 });
-            const url = `${this.binaryCdnUrl}/${this.binary}`;
+        const url = `${this.binaryCdnUrl}/${this.binary}`;
+        console.log(`Downloading binary from ${url}`);
+        // Download to a unique partial path and rename into place once the fd is
+        // closed. Writing straight to the final path let a concurrent existsSync
+        // see a half-written file and spawn it (ETXTBSY / truncated binary).
+        // rename is atomic because the partial file is on the same mount.
+        const partialPath = `${tempBinaryPath}.${process.pid}.${++downloadCounter}.download`;
+        const download = new Promise((resolve, reject) => {
+            const file = fs.createWriteStream(partialPath, { mode: 0o755 });
+            const discardPartial = (err) => {
+                file.close();
+                fs.unlink(partialPath, () => { });
+                reject(err);
+            };
             https
                 .get(url, (response) => {
                 if (response.statusCode !== 200) {
-                    reject(new Error(`Failed to download binary. Status code: ${response.statusCode}`));
+                    discardPartial(new Error(`Failed to download binary. Status code: ${response.statusCode}`));
                     return;
                 }
                 response.pipe(file);
                 file.on("finish", () => {
-                    file.close();
-                    resolve(tempBinaryPath);
+                    file.close((closeErr) => {
+                        if (closeErr) {
+                            fs.unlink(partialPath, () => { });
+                            reject(closeErr);
+                            return;
+                        }
+                        try {
+                            fs.renameSync(partialPath, tempBinaryPath);
+                        }
+                        catch (renameErr) {
+                            fs.unlink(partialPath, () => { });
+                            reject(renameErr);
+                            return;
+                        }
+                        resolve(tempBinaryPath);
+                    });
                 });
             })
-                .on("error", (err) => {
-                fs.unlink(tempBinaryPath, () => { });
-                reject(err);
-            });
+                .on("error", discardPartial);
+        }).finally(() => {
+            downloadsInFlight.delete(this.binary);
         });
-        return this.downloadSemaphores[this.binary];
+        downloadsInFlight.set(this.binary, download);
+        return download;
     }
     checkIfPresetAndMerge() {
         if (this.options.impersonate === undefined)
