@@ -1,4 +1,20 @@
 import type { CurlImpersonateOptions, CurlResponse } from "./interfaces";
+/**
+ * CurlExitError is thrown when the curl-impersonate binary runs but exits
+ * non-zero. The message carries only low-cardinality fields (exit code,
+ * signal, binary path) so log pipelines can aggregate on it; the variable
+ * stderr tail lives on the `stderr` property instead of the message.
+ */
+export declare class CurlExitError extends Error {
+    readonly status: number;
+    readonly signal: NodeJS.Signals | null;
+    readonly binaryPath: string;
+    /** Last 500 characters of curl's verbose stderr. */
+    readonly stderr: string;
+    constructor(status: number, signal: NodeJS.Signals | null, binaryPath: string, 
+    /** Last 500 characters of curl's verbose stderr. */
+    stderr: string);
+}
 export declare class CurlImpersonate {
     url: string;
     options: CurlImpersonateOptions;

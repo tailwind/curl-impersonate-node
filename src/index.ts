@@ -30,6 +30,27 @@ import * as https from "node:https";
 const downloadsInFlight = new Map<string, Promise<string>>();
 let downloadCounter = 0;
 
+/**
+ * CurlExitError is thrown when the curl-impersonate binary runs but exits
+ * non-zero. The message carries only low-cardinality fields (exit code,
+ * signal, binary path) so log pipelines can aggregate on it; the variable
+ * stderr tail lives on the `stderr` property instead of the message.
+ */
+export class CurlExitError extends Error {
+  constructor(
+    readonly status: number,
+    readonly signal: NodeJS.Signals | null,
+    readonly binaryPath: string,
+    /** Last 500 characters of curl's verbose stderr. */
+    readonly stderr: string
+  ) {
+    super(
+      `curl-impersonate exited with code ${status} (signal: ${signal}) using ${binaryPath}`
+    );
+    this.name = "CurlExitError";
+  }
+}
+
 export class CurlImpersonate {
   url: string;
   options: CurlImpersonateOptions;
@@ -234,8 +255,11 @@ export class CurlImpersonate {
     const verbose = stderr.toString();
 
     if (result.status && result.status !== 0) {
-      throw new Error(
-        `curl-impersonate exited with code ${result.status} (signal: ${result.signal}) using ${binaryPath}. stderr: ${verbose.slice(0, 500)}`
+      throw new CurlExitError(
+        result.status,
+        result.signal,
+        binaryPath,
+        verbose.slice(-500)
       );
     }
 
